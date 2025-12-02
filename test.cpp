@@ -423,7 +423,6 @@ void DrawDemo(GameStates::TesseractState& state, const BulletParams& params, con
 
     // 渲染逻辑
     for (int i = 0; i < 16; ++i) {
-        // 【关键改动1】: 顶点使用state内预设的更大值, 此处不用再乘
         GameStates::TesseractState::Vec4 v = state.vertices[i];
 
         // 4D旋转
@@ -435,10 +434,9 @@ void DrawDemo(GameStates::TesseractState& state, const BulletParams& params, con
         double p_w = v.w + 5.0; // 投影距离
         GameStates::TesseractState::Vec3 v3 = {v.x * 3.0 / p_w, v.y * 3.0 / p_w, v.z * 3.0 / p_w};
 
-        // 【关键改动2】: 3D到2D投影并大幅增加最终缩放系数
         double screenDist = 8.0;
         double scale = screenDist / (8.0 - v3.z);
-        double final_draw_scale = 280.0; // 原120过小, 现大幅增加以达到全屏效果
+        double final_draw_scale = 280.0;
 
         state.projectedVertices[i] = {
             v3.x * scale * final_draw_scale + params.centerX,
@@ -472,7 +470,7 @@ void DrawDemo(GameStates::TesseractState& state, const BulletParams& params, con
             double distToChara = sqrt(pow(x - chara.cX, 2) + pow(y - chara.cY, 2));
             if (distToChara < (chara.actualsize + params.actualsize) / 2.0) {
                 DWORD currTime = GetTickCount();
-                if (currTime - *lastHitTime >= 1514 && !isDead) { // 1秒无敌帧
+                if (currTime - *lastHitTime >= 1514 && !isDead) {
                     (*temp)++;
                     mciSendString("play sounds/biu.wav from 0", NULL, 0, NULL);
                     *lastHitTime = currTime;
