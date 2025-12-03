@@ -1,17 +1,31 @@
 #include <graphics.h>
 #include <cmath>
 #include <iostream>
-#include <conio.h>
 #include <Windows.h>
-#include <mmsystem.h>
 #include <vector>
-#include <numeric>
 
 #pragma comment(lib, "winmm.lib")
 
 const int WINDOW_WIDTH = 600;
 const int WINDOW_HEIGHT = 700;
 const double PI = acos(-1.0);
+
+enum GameState {
+    SELECT_LEVEL,
+    PLAYING_LEVEL,
+    HELP_SCREEN,
+    STAFF_SCREEN   
+};
+
+enum MusicTrack {
+    MUSIC_NONE = 0,
+    MUSIC_TITLE,    
+    MUSIC_STAGE_1,
+    MUSIC_STAGE_2,
+    MUSIC_STAGE_3,  
+    MUSIC_DEAD,    
+    MUSIC_STAFF  
+};
 
 struct BulletParams {
     IMAGE* imgShot;
@@ -41,8 +55,13 @@ struct Character {
     int direction; // 0=default, 1=left, 2=right
 };
 
+struct StaffSection {
+    const char* title;
+    const char* content;
+};
+
 namespace GameStates {
-    // --- DrawScatterBullet 状态 ---
+    // --- DrawScatterBullet  ---
     struct ScatterState {
         double frame;
     };
@@ -50,7 +69,7 @@ namespace GameStates {
         state.frame = 0.0;
     }
 
-    // --- DrawBullet_butter 状态 ---
+    // --- DrawBullet_butter  ---
     struct ButterState {
         int fireCycle;
         bool isRoundActive;
@@ -82,7 +101,7 @@ namespace GameStates {
         memset(&state, 0, sizeof(ButterState)); 
     }
 
-    // --- DrawBullet_yuyuko 状态 ---
+    // --- DrawBullet_yuyuko  ---
     struct YuyukoState {
         static const int MAX_FIRED_ROUNDS = 50;
         double roundBaseAngles[MAX_FIRED_ROUNDS];
@@ -98,6 +117,7 @@ namespace GameStates {
     void ResetYuyukoState(YuyukoState& state) {
         memset(&state, 0, sizeof(YuyukoState));
     }
+    
     struct TesseractState {
         struct Vec4 { double x, y, z, w; };
         struct Vec3 { double x, y, z; };
@@ -120,9 +140,7 @@ namespace GameStates {
 
 // 散乱银河 (欧拉函数)
 void DrawScatterBullet(GameStates::ScatterState& state, const BulletParams& params, const Character& chara, int* temp, DWORD* lastHitTime, double progress, bool isDead) {
-    if (!isDead) {
-         state.frame++;
-    }
+    if (!isDead) state.frame++;
 
     const double BASE_LOG_SCALE = 0.4;
     const double BREATH_AMP = 0.35;
@@ -293,7 +311,7 @@ void DrawBullet_butter(GameStates::ButterState& state, const BulletParams& param
                 }
             }
         } else {
-            state.bulletActive[i] = false;//回收资源 
+            state.bulletActive[i] = false;
         }
     }
 }
@@ -386,21 +404,17 @@ void DrawBullet_yokary(const BulletParams& params, const Character& chara, int* 
         int winX = params.centerX + static_cast<int>(x);
         int winY = params.centerY - static_cast<int>(y);
 
-        if (!(winX >= -params.imgwidth/2 && winX <= WINDOW_WIDTH + params.imgwidth/2 &&
-              winY >= -params.imglength/2 && winY <= WINDOW_HEIGHT + params.imglength/2)) continue; 
+        if (!(winX >= params.imgwidth/2 && winX <= WINDOW_WIDTH - params.imgwidth/2 &&
+              winY >= params.imglength/2 && winY <= WINDOW_HEIGHT - params.imglength/2)) continue; 
+        if (!isDead) putimage(winX - params.imgwidth/2, winY - params.imglength/2, params.imgShot, SRCPAINT);
+        double distToChara = sqrt(pow(winX - chara.cX, 2) + pow(winY - chara.cY, 2));
 
-        if (winX > -20 && winX < WINDOW_WIDTH+20 && winY > -20 && winY < WINDOW_HEIGHT + 20)
-        {
-            if (!isDead) putimage(winX - params.imgwidth/2, winY - params.imglength/2, params.imgShot, SRCPAINT);
-            double distToChara = sqrt(pow(winX - chara.cX, 2) + pow(winY - chara.cY, 2));
-
-            if (distToChara < (chara.actualsize + params.actualsize) / 2.0) {
-                DWORD currentTime = GetTickCount();
-                if (currentTime - *lastHitTime >= 1514 && !isDead) {
-                    (*temp)++;
-                    mciSendString("play sounds/biu.wav from 0", NULL, 0, NULL);
-                    *lastHitTime = currentTime;
-                }
+        if (distToChara < (chara.actualsize + params.actualsize) / 2.0) {
+            DWORD currentTime = GetTickCount();
+            if (currentTime - *lastHitTime >= 1514 && !isDead) {
+                (*temp)++;
+                mciSendString("play sounds/biu.wav from 0", NULL, 0, NULL);
+                *lastHitTime = currentTime;
             }
         }
     }
@@ -563,47 +577,127 @@ void DrawAsciiString(int startX, int startY, const char* str, int size, IMAGE& g
     }
 }
 
-enum GameState {
-    SELECT_LEVEL,  // 选关界面
-    PLAYING_LEVEL  // 游戏界面
-};
-
-int main()
-{
+void UpdateBackgroundMusic(int& current, int target) { // reference 
+    if (current == target) return;
     
-    const int SLEEP_MS = 10;
-    int temp = 0; 
+    switch (current) {
+        case MUSIC_TITLE:   mciSendString("stop stage_music", NULL, 0, NULL); break;
+        case MUSIC_STAGE_1: mciSendString("stop bgm_st1", NULL, 0, NULL); break;
+        case MUSIC_STAGE_2: mciSendString("stop bgm_st2", NULL, 0, NULL); break;
+        case MUSIC_STAGE_3: mciSendString("stop bgm_st3", NULL, 0, NULL); break;
+        case MUSIC_DEAD:    mciSendString("stop dead_music", NULL, 0, NULL); break;
+        case MUSIC_STAFF:   mciSendString("stop staff_music", NULL, 0, NULL); break;
+    }
+    switch (target) {
+        case MUSIC_TITLE:   mciSendString("play stage_music from 0 repeat", NULL, 0, NULL); break;
+        case MUSIC_STAGE_1: mciSendString("play bgm_st1 from 0 repeat", NULL, 0, NULL); break;
+        case MUSIC_STAGE_2: mciSendString("play bgm_st2 from 0 repeat", NULL, 0, NULL); break;
+        case MUSIC_STAGE_3: mciSendString("play bgm_st3 from 0 repeat", NULL, 0, NULL); break;
+        case MUSIC_DEAD:    mciSendString("play dead_music from 0 repeat", NULL, 0, NULL); break;
+        case MUSIC_STAFF:   mciSendString("play staff_music from 0 repeat", NULL, 0, NULL); break;
+    }
+    
+    current = target;
+}
+
+
+void SelectLevelInterface(int selectedIndex, IMAGE& g_AsciiFontImg) {
+    const char* menuItems[] = { "STAGE 1", "STAGE 2", "STAGE 3", "HELP", "STAFF" };
+    int itemCount = 5;
+    const int BASE_SIZE = 24;
+    const int SELECTED_SIZE = 32; 
+    const int SPACING = 50;     
+    int startY = WINDOW_HEIGHT / 3;
+
+    DrawAsciiString(WINDOW_WIDTH/2 - 12 * 24 / 2, WINDOW_HEIGHT / 6, "SELECT STAGE!", 24, g_AsciiFontImg);
+    for (int i = 0; i < itemCount; i++) {
+        int textSize = (i == selectedIndex) ? SELECTED_SIZE : BASE_SIZE;
+        int textWidth = strlen(menuItems[i]) * textSize;
+        int textX = WINDOW_WIDTH / 2 - textWidth / 2;
+        int textY = startY + i * SPACING;
+        DrawAsciiString(textX, textY, menuItems[i], textSize, g_AsciiFontImg);
+    }
+}
+
+//滚动staff 
+void DrawStaffRoll(int frameTime, IMAGE& font) {
+    StaffSection sections[] = {
+        { "--- AUTHOR ---", "molunker" },
+        { "--- Original Work---", "ZUN - touhou project" },
+        { "--- SPECIAL THANKS ---", "Bilibili 8331314" },
+        { "", "And You !\nThanks for\nyour playing!" }
+    };
+    int sectionCount = sizeof(sections) / sizeof(sections[0]);
+
+    const int FADE_IN_DURATION = 514; //前 
+    const int STAY_DURATION = 200;   //中 
+    const int FADE_OUT_DURATION = 200;  //后 
+    const int SECTION_TOTAL_TIME = FADE_IN_DURATION + STAY_DURATION + FADE_OUT_DURATION;
+    int currentSectionIndex = frameTime / SECTION_TOTAL_TIME;
+    int timeInCurrentSection = frameTime % SECTION_TOTAL_TIME;
+
+    if (currentSectionIndex >= sectionCount) {
+        currentSectionIndex = sectionCount - 1;
+        timeInCurrentSection = SECTION_TOTAL_TIME;
+    }
+    StaffSection& sec = sections[currentSectionIndex];
+    int startX = 10; 
+    int currentY = 0;
+    int targetY = WINDOW_HEIGHT - 250;
+
+    if (timeInCurrentSection < FADE_IN_DURATION) {
+        float progress = (float)timeInCurrentSection / FADE_IN_DURATION;
+        float ease = 1.0f - (1.0f - progress) * (1.0f - progress);
+        currentY = WINDOW_HEIGHT - (WINDOW_HEIGHT - targetY) * ease;
+    }
+    
+    else if (timeInCurrentSection < FADE_IN_DURATION + STAY_DURATION) currentY = targetY;
+
+    else {
+        int timeOut = timeInCurrentSection - (FADE_IN_DURATION + STAY_DURATION);
+        float progress = (float)timeOut / FADE_OUT_DURATION;
+        currentY = targetY - progress * (WINDOW_HEIGHT / 2 + 100);
+    }
+	
+	//滚动效果 
+    if (currentY > -100 && currentY < WINDOW_HEIGHT + 100) {
+        DrawAsciiString(startX, currentY, sec.title, 24, font);
+        int contentY = currentY + 40;
+        char buffer[256];
+        strcpy(buffer, sec.content);
+        const char* delim = "\n";
+        char* line = strtok(buffer, delim);
+        while (line != NULL) {
+            DrawAsciiString(startX + 20, contentY, line, 24, font);
+            contentY += 30;
+            line = strtok(NULL, delim);
+        }
+    }
+}
+
+int main(){
+	//参数 
+    int staffFrameTimer = 0;  //staff计时器
+    const int SLEEP_MS = 10; //帧率参数 
+    int life = 0;
     DWORD lastHitTime = 0; 
     DWORD startTime = 0;
     DWORD startBulletTime = 0;
-    const int FADE_DURATION = 3500; 
     bool isDead = false; 
-    bool deadMusicPlayed = false;
     bool testmode = false;
     int selectedLevel = 0;
-    int frameDelay = 0; 
     const double F_MAX = 3371.0;   //符卡时长 
-    const double PI = acos(-1);
-    const int WINDOW_WIDTH = 600;
-    const int WINDOW_HEIGHT = 700;
     ExMessage msg = { 0 };
-
-	//选关按钮 
-    const int BUTTON_WIDTH = 200;
-    const int BUTTON_HEIGHT = 60;
-    const int BUTTON_SPACING = 40;
-    const int BUTTON_X = (WINDOW_WIDTH - BUTTON_WIDTH) / 2;
-    const int BUTTON_Y1 = WINDOW_HEIGHT / 2 - BUTTON_HEIGHT - BUTTON_SPACING;
-    const int BUTTON_Y2 = WINDOW_HEIGHT / 2;
-    const int BUTTON_Y3 = WINDOW_HEIGHT / 2 + BUTTON_HEIGHT + BUTTON_SPACING;
+    int currentMusic = 0; 
+	int targetMusic = MUSIC_NONE; 
 
     initgraph(WINDOW_WIDTH + 300, WINDOW_HEIGHT);
     IMAGE background, background1, leftbackground, lives, g_AsciiFontImg;
-    loadimage(&background, "assest//eff06b.png", WINDOW_WIDTH, WINDOW_HEIGHT);
-    loadimage(&background1, "assest//eff06.png", WINDOW_WIDTH, WINDOW_HEIGHT);
-    loadimage(&leftbackground, "assest//leftbackground.png", 300, WINDOW_HEIGHT);
-    loadimage(&lives, "assest//lives.png", 30, 30); 
-    loadimage(&g_AsciiFontImg, "assest//ascii.png", 256, 96);
+    loadimage(&background, "assets//eff06b.png", WINDOW_WIDTH, WINDOW_HEIGHT);
+    loadimage(&background1, "assets//eff06.png", WINDOW_WIDTH, WINDOW_HEIGHT);
+    loadimage(&leftbackground, "assets//leftbackground.png", 300, WINDOW_HEIGHT);
+    loadimage(&lives, "assets//lives.png", 30, 30); 
+    loadimage(&g_AsciiFontImg, "assets//ascii.png", 256, 96);
 
     // 灰度背景
     IMAGE grayBackground = background;
@@ -611,11 +705,12 @@ int main()
     ApplyGrayEffect(&grayBackground);
     ApplyGrayEffect(&grayBackground1);
 
-    // 子弹角度偏移(波与粒的境界)
+    // 弹幕生长周期和角度偏移(波与粒的境界)
+    const int FADE_DURATION = 3500; 
     const double angleOffsets[] = {8 * PI / 5, 6 * PI /5, 4 * PI / 5, 2 * PI / 5, 0.0};
     const int BULLET_GROUP_COUNT = sizeof(angleOffsets) / sizeof(angleOffsets[0]);
     
-    // 子弹参数初始化
+    // 弹幕初始化
     IMAGE Param1Shot,Param2Shot,Param3Shot,Param4Shot;
     BulletParams param1 = {
         &Param1Shot,    // imgShot
@@ -662,10 +757,10 @@ int main()
         0.0        // angle
     };//小玉 
     
-    loadimage(&Param1Shot, "assest//smallshot.png", param1.imgwidth, param1.imglength);
-    loadimage(&Param2Shot, "assest//bigshot.png", param2.imgwidth, param2.imglength);
-    loadimage(&Param3Shot, "assest//buttershot.png", param3.imgwidth, param3.imglength);
-    loadimage(&Param4Shot, "assest//bigshot.png", param4.imgwidth, param4.imglength);
+    loadimage(&Param1Shot, "assets//smallshot.png", param1.imgwidth, param1.imglength);
+    loadimage(&Param2Shot, "assets//bigshot.png", param2.imgwidth, param2.imglength);
+    loadimage(&Param3Shot, "assets//buttershot.png", param3.imgwidth, param3.imglength);
+    loadimage(&Param4Shot, "assets//bigshot.png", param4.imgwidth, param4.imglength);
 
     // 角色初始化
     IMAGE imgChara, imgCharaLeft, imgCharaRight;
@@ -703,13 +798,13 @@ int main()
         0                    // direction
     };
     
-    loadimage(&imgChara, "assest//player.png", chara_s.imglength, chara_s.imgwidth);
-    loadimage(&imgCharaLeft, "assest//playerleft.png", chara_s.imglength, chara_s.imgwidth);
-    loadimage(&imgCharaRight, "assest//playerright.png", chara_s.imglength, chara_s.imgwidth);
-    loadimage(&imgEnemy, "assest//enemy.png", enemy_s.imglength, enemy_s.imgwidth); 
-    loadimage(&imgEnemyLeft, "assest//enemyleft.png", enemy_s.imglength, enemy_s.imgwidth);
-    loadimage(&imgEnemyRight, "assest//enemyright.png", enemy_s.imglength, enemy_s.imgwidth);
-    loadimage(&dead, "assest//dead.png", enemy_s.imglength, enemy_s.imgwidth);
+    loadimage(&imgChara, "assets//player.png", chara_s.imglength, chara_s.imgwidth);
+    loadimage(&imgCharaLeft, "assets//playerleft.png", chara_s.imglength, chara_s.imgwidth);
+    loadimage(&imgCharaRight, "assets//playerright.png", chara_s.imglength, chara_s.imgwidth);
+    loadimage(&imgEnemy, "assets//enemy.png", enemy_s.imglength, enemy_s.imgwidth); 
+    loadimage(&imgEnemyLeft, "assets//enemyleft.png", enemy_s.imglength, enemy_s.imgwidth);
+    loadimage(&imgEnemyRight, "assets//enemyright.png", enemy_s.imglength, enemy_s.imgwidth);
+    loadimage(&dead, "assets//dead.png", enemy_s.imglength, enemy_s.imgwidth);
 
 	const char* stageTexts[3] = {"STAGE 1", "STAGE 2", "STAGE 3"};
 	int selectedIndex = 0;
@@ -721,153 +816,141 @@ int main()
     GameStates::YuyukoState yuyukoState;
     GameStates::TesseractState tesseractState;
 
+	// 音频音效初始化 
 	mciSendStringA("open sounds/select.wav alias select_sound", NULL, 0, NULL);
     mciSendStringA("open sounds/enter.wav alias enter_sound", NULL, 0, NULL);
     mciSendStringA("open sounds/dead.mp3 alias dead_music", NULL, 0, NULL);
-
-    while (true)
-    {
+	mciSendStringA("open sounds/staff.mp3 alias staff_music", NULL, 0, NULL);
+	mciSendStringA("open sounds/stage.mp3 alias stage_music", NULL, 0, NULL);
+	mciSendStringA("open sounds/bgm_st1.mp3 alias bgm_st1", NULL, 0, NULL);
+	mciSendStringA("open sounds/bgm_st2.mp3 alias bgm_st2", NULL, 0, NULL);
+	mciSendStringA("open sounds/bgm_st3.mp3 alias bgm_st3", NULL, 0, NULL);
+	
+    while (true){
         BeginBatchDraw();
         cleardevice();
+		if (currentState == SELECT_LEVEL) targetMusic = MUSIC_TITLE;
+	    else if (currentState == PLAYING_LEVEL) {
+	        if (isDead) targetMusic = MUSIC_DEAD;
+	        else{
+	            switch (selectedLevel) {
+	                case 1: targetMusic = MUSIC_STAGE_1; break;
+	                case 2: targetMusic = MUSIC_STAGE_2; break;
+	                case 3: targetMusic = MUSIC_STAGE_3; break;
+	            }
+        	}
+	    }
+	    else if (currentState == HELP_SCREEN) targetMusic = MUSIC_TITLE;
+	    else if (currentState == STAFF_SCREEN) targetMusic = MUSIC_STAFF; 
 
-        // 绘制左侧UI背景
-        putimage(600, 0, &leftbackground);
-        for(int i=0; i<5-temp; ++i) 
-            putimage(700+i*30,123,&lives);
-        if(testmode) 
-            DrawAsciiString(680, 15, "TEST MODE", 24, g_AsciiFontImg);
+        if (currentState == SELECT_LEVEL){
+            putimage(0, 0, &grayBackground1, SRCPAINT);
+            SelectLevelInterface(selectedIndex, g_AsciiFontImg);
 
-        if (currentState == SELECT_LEVEL)
-        {
-            putimage(0, 0, &grayBackground);
-            putimage(0, 0, &grayBackground1, SRCCOPY);
-            
-            // 绘制标题
-            DrawAsciiString(WINDOW_WIDTH/2 - 200, WINDOW_HEIGHT/6, "SELECT YOUR STAGE!", 24, g_AsciiFontImg);
-            
-            // 处理输入
             while (peekmessage(&msg)) {
                 if (msg.message == WM_KEYDOWN) {
                     switch (msg.vkcode) {
-                        case VK_UP: {
-                            selectedIndex = (selectedIndex - 1 + 3) % 3;
+						case VK_UP: {
+						    selectedIndex = (selectedIndex - 1 + 5) % 5;
+						    mciSendStringA("play select_sound from 0", NULL, 0, NULL);
+						    break;
+						}
+						case VK_DOWN: {
+						    selectedIndex = (selectedIndex + 1) % 5;
 							mciSendStringA("play select_sound from 0", NULL, 0, NULL);
-                            break;
-                        }
-                        case VK_DOWN: {
-                            selectedIndex = (selectedIndex + 1) % 3;
-							mciSendStringA("play select_sound from 0", NULL, 0, NULL);
-                            break;
-                        }
+						    break;
+						}
                         case 13: // 回车键确认
                         case 'Z': { // Z键确认
 	                        mciSendStringA("play enter_sound from 0", NULL, 0, NULL);
-                            
-                            selectedLevel = selectedIndex + 1;
-                            currentState = PLAYING_LEVEL;
-                            temp = 0;
-                            isDead = false;
-                            deadMusicPlayed = false;
-                            startTime = GetTickCount();
-                            startBulletTime = 0;
-                            param1.f = 0.0;
-                            lastHitTime = 0;
-							chara_s.vx = 0;
-							chara_s.vy = 0;
-							chara_s.direction = 0; 
-                            
-                            mciSendString("stop bgm", NULL, 0, NULL);
-							mciSendString("close bgm", NULL, 0, NULL);
-							mciSendString("stop dead_music", NULL, 0, NULL);
-							mciSendString("close dead_music", NULL, 0, NULL);
-                 	    	mciSendStringA("open sounds/background_music.mp3 alias bgm", NULL, 0, NULL);
-            	            mciSendStringA("play bgm repeat", NULL, 0, NULL);
-                            
-                            // 重置角色位置
-                            enemy_s.cX = 300;
-                            enemy_s.cY = 150;
-                            chara_s.cX = WINDOW_WIDTH / 2;
-                            chara_s.cY = WINDOW_HEIGHT - 32;
-                            
-                            // 重置子弹状态
-                            GameStates::ResetScatterState(scatterState);
-                            GameStates::ResetButterState(butterState);
-                            GameStates::ResetYuyukoState(yuyukoState);
-                            GameStates::ResetTesseractState(tesseractState);
-                            break;
+						    if (selectedIndex < 3) {                            
+	                            selectedLevel = selectedIndex + 1;
+	                            currentState = PLAYING_LEVEL;
+	                            life = 0;
+	                            isDead = false;
+	                            startTime = GetTickCount();
+	                            startBulletTime = 0;
+	                            param1.f = 0.0;
+	                            lastHitTime = 0;
+								chara_s.vx = 0;
+								chara_s.vy = 0;
+								chara_s.direction = 0; 
+
+	                            // 重置角色位置
+	                            enemy_s.cX = 300;
+	                            enemy_s.cY = 150;
+	                            chara_s.cX = WINDOW_WIDTH / 2;
+	                            chara_s.cY = WINDOW_HEIGHT - 32;
+	                            
+	                            // 重置子弹状态
+	                            GameStates::ResetScatterState(scatterState);
+	                            GameStates::ResetButterState(butterState);
+	                            GameStates::ResetYuyukoState(yuyukoState);
+	                            GameStates::ResetTesseractState(tesseractState);
+						    }
+						    else if (selectedIndex == 3) {
+						        currentState = HELP_SCREEN;
+						    }
+							else if (selectedIndex == 4) {
+							    currentState = STAFF_SCREEN;
+							    staffFrameTimer = 0; // 重置计时器
+							}
+						    break;
                         }
                     }
                 }
             }
-            
-            // 绘制关卡选择
-            const int BASE_SIZE = 24;
-            const int SELECTED_SIZE = 32;
-            const int SPACING = 60;
-            int startY = WINDOW_HEIGHT / 3;
-            
-            for (int i = 0; i < 3; i++) {
-                int textSize = (i == selectedIndex) ? SELECTED_SIZE : BASE_SIZE;
-                int textWidth = strlen(stageTexts[i]) * textSize;
-                int textX = WINDOW_WIDTH / 2 - textWidth / 2;
-                int textY = startY + i * SPACING;
-                DrawAsciiString(textX, textY, stageTexts[i], textSize, g_AsciiFontImg);
-            }
-        }
-        else if (currentState == PLAYING_LEVEL)
-        {
+		}
+		
+        else if (currentState == PLAYING_LEVEL){
 	        putimage(0, 0, &background, SRCCOPY);
 	        putimage(0, 0, &background1, SRCPAINT);
             
             DWORD currentTime = GetTickCount();
             if (currentTime - startTime >= 1000 && !isDead) {
-                if (startBulletTime == 0) 
-                    startBulletTime = currentTime;
-
+                if (startBulletTime == 0) startBulletTime = currentTime;
+                    
                 double progress = static_cast<double>(currentTime - startBulletTime) / FADE_DURATION;
                 progress = progress > 1.0 ? 1.0 : progress;
                 progress = progress < 0.0 ? 0.0 : progress;
 
-                // 根据关卡绘制子弹
                 switch(selectedLevel){
                     case 1:
                         for (int i = 0; i < BULLET_GROUP_COUNT; ++i) {
                             param1.angleOffset = angleOffsets[i];
-                            DrawBullet_yokary(param1, chara_s, &temp, &lastHitTime, progress, isDead, i);
+                            DrawBullet_yokary(param1, chara_s, &life, &lastHitTime, progress, isDead, i);
                         }      
-                        DrawBullet_butter(butterState, param3, chara_s, enemy_s, &temp, &lastHitTime, isDead);
+                        DrawBullet_butter(butterState, param3, chara_s, enemy_s, &life, &lastHitTime, isDead);
                         break;
                     case 2:
-                        DrawDemo(tesseractState, param4, chara_s, &temp, &lastHitTime, isDead);
-                        DrawBullet_butter(butterState, param3, chara_s, enemy_s, &temp, &lastHitTime, isDead);
-                        DrawBullet_yuyuko(yuyukoState, param2, chara_s, &temp, &lastHitTime, progress, isDead);
+                        DrawDemo(tesseractState, param4, chara_s, &life, &lastHitTime, isDead);
+                        DrawBullet_butter(butterState, param3, chara_s, enemy_s, &life, &lastHitTime, isDead);
+                        DrawBullet_yuyuko(yuyukoState, param2, chara_s, &life, &lastHitTime, progress, isDead);
                         break;
                     case 3:
-                        DrawScatterBullet(scatterState, param4, chara_s, &temp, &lastHitTime, progress, isDead);
-                        DrawBullet_butter(butterState, param3, chara_s, enemy_s, &temp, &lastHitTime, isDead);
+                        DrawScatterBullet(scatterState, param4, chara_s, &life, &lastHitTime, progress, isDead);
+                        DrawBullet_butter(butterState, param3, chara_s, enemy_s, &life, &lastHitTime, isDead);
                         break;
                 }
             }
             
-            // 绘制敌人
+            // 绘制uuz
             if (!isDead){
                 IMAGE* enemyCurrentImg = enemy_s.imgChara; 
-                if (enemy_s.direction == 1) {
-                    enemyCurrentImg = enemy_s.imgCharaLeft;
-                } else if (enemy_s.direction == 2) {
-                    enemyCurrentImg = enemy_s.imgCharaRight;
-                }
+                
+                if (enemy_s.direction == 1) enemyCurrentImg = enemy_s.imgCharaLeft;
+				else if (enemy_s.direction == 2) enemyCurrentImg = enemy_s.imgCharaRight;
+
                 putimage(enemy_s.cX - enemy_s.imglength/2, enemy_s.cY - enemy_s.imgwidth/2, enemyCurrentImg, SRCPAINT);
             }
             
             // 绘制玩家
             if (!isDead && (currentTime - lastHitTime >= 1514 || (currentTime % 200) < 100)) {
                 IMAGE* currentImg = chara_s.imgChara;
-                if (chara_s.direction == 1) { 
-                    currentImg = chara_s.imgCharaLeft;
-                } else if (chara_s.direction == 2) { 
-                    currentImg = chara_s.imgCharaRight;
-                }
+                
+                if (chara_s.direction == 1) currentImg = chara_s.imgCharaLeft;
+				else if (chara_s.direction == 2) currentImg = chara_s.imgCharaRight;
+
                 putimage(chara_s.cX - chara_s.imglength/2, chara_s.cY - chara_s.imgwidth/2, currentImg, SRCPAINT);
                 if (chara_s.showHitPoint) {
                     setfillcolor(WHITE);
@@ -876,35 +959,23 @@ int main()
                 }
             }
             
-            // 死亡判断
-            if (temp >= 5) {
+            // 结束判断
+            if (life >= 5) {
                 isDead = true;
                 ApplyGrayEffect(&grayBackground);
                 ApplyGrayEffect(&grayBackground1);
-                if (!deadMusicPlayed) {
-                	mciSendString("stop bgm", NULL, 0, NULL);
-					mciSendStringA("play dead_music from 0", NULL, 0, NULL); 
-                    deadMusicPlayed = true;
-                }
             }
             else if (param1.f > F_MAX){
             	isDead = true;
-            	mciSendString("close bgm", NULL, 0, NULL);
             	currentState = SELECT_LEVEL;
-			} 
+			}
             
             if (isDead) {
-                settextcolor(WHITE);
                 setbkmode(TRANSPARENT);
                 DrawAsciiString(WINDOW_WIDTH/2 - 105, WINDOW_HEIGHT/2, "Game Over", 24, g_AsciiFontImg);
                 putimage(WINDOW_WIDTH/2 - enemy_s.imgwidth/2, 100, &dead, SRCPAINT);
                 while (peekmessage(&msg)) {
-                    if (msg.message == WM_KEYDOWN && msg.vkcode == 'X'){
-                        currentState = SELECT_LEVEL;
-                        mciSendString("stop deadbgm", NULL, 0, NULL);
-                        mciSendString("close deadbgm", NULL, 0, NULL);
-                        deadMusicPlayed = false;
-                    }
+                    if (msg.message == WM_KEYDOWN && msg.vkcode == 'X') currentState = SELECT_LEVEL;
                 }
             }
             
@@ -933,8 +1004,6 @@ int main()
                         case 'X': 
                             currentState = SELECT_LEVEL;
                             mciSendStringA("play enter_sound from 0", NULL, 0, NULL);
-                            mciSendString("stop bgm", NULL, 0, NULL);
-                            mciSendString("close bgm", NULL, 0, NULL);
                             break;
                     }
                 } else if (msg.message == WM_KEYUP) {
@@ -971,25 +1040,68 @@ int main()
             
             enemy_s.actualsize = enemy_s.cX;
             if (!isDead) UpdateEnemyMovement(enemy_s);
-            
-            // 作弊模式
-            if (testmode) temp = 0;
-                
-            // 显示进度
-            char tempstr[20];
-            if (!isDead) {
-                sprintf(tempstr, "%d/%d", (int)param1.f, (int)F_MAX);
-            }
-            DrawAsciiString(WINDOW_WIDTH+100, WINDOW_HEIGHT/2-95, tempstr, 21, g_AsciiFontImg);
+            if (testmode) life = 0;
         }
 
+		else if (currentState == HELP_SCREEN) {
+		    putimage(0, 0, &grayBackground);
+		    DrawAsciiString(WINDOW_WIDTH/2 - 2*24, 50, "HELP", 24, g_AsciiFontImg);
+		    const char* helpLines[] = {
+		        "Use ARROW KEYS to move.",
+		        "Hold SHIFT to slow down.",
+		        "lives and time are","displayed on the right side",
+				"Hold on until the time is up","","",
+				
+		        "STAGE 1","","Boundary Sign Wave-Particle Duality","","Inspired by Perfect Cherry Blossom","",
+		        "STAGE 2","","Four-Dimensional Danmaku","","Inspired by bilibili BV18E411D74G","",
+		        "STAGE 3","","MathBreathe Danmaku","","Inspired by bilibili BV1H4411c7XK","","",
+		        
+		        "Press X to return."
+		    };
+		    int lineY = 120;
+		    for(const char* line : helpLines) {
+		        DrawAsciiString(40, lineY, line, 16, g_AsciiFontImg);
+		        lineY += 20;
+		    }
+		    while (peekmessage(&msg, EX_KEY)) {
+			    if (msg.message == WM_KEYDOWN && msg.vkcode == 'X') {
+					currentState = SELECT_LEVEL;
+                    mciSendStringA("play enter_sound from 0", NULL, 0, NULL);
+                    break;
+			    }
+			}
+		}
+		
+		else if (currentState == STAFF_SCREEN) {
+		    putimage(0, 0, &grayBackground);
+		    staffFrameTimer++;
+		    DrawStaffRoll(staffFrameTimer, g_AsciiFontImg);
+			DrawAsciiString(WINDOW_WIDTH - 300, WINDOW_HEIGHT - 30, "Press X to return", 16, g_AsciiFontImg);
+		    while (peekmessage(&msg, EX_KEY)) {
+			    if (msg.message == WM_KEYDOWN && (msg.vkcode == 'X' || msg.vkcode == VK_ESCAPE)) {
+					currentState = SELECT_LEVEL;
+                    mciSendStringA("play enter_sound from 0", NULL, 0, NULL);
+                    break;
+			    }
+			}
+		}
+
+        // 绘制左侧UI
+        putimage(600, 0, &leftbackground);
+        if(testmode) DrawAsciiString(680, 15, "TEST MODE", 24, g_AsciiFontImg);
+        char tempstr[20];
+        if (!isDead && currentState == PLAYING_LEVEL){
+        	sprintf(tempstr, "%d/%d", (int)param1.f, (int)F_MAX);
+        	DrawAsciiString(WINDOW_WIDTH+100, WINDOW_HEIGHT/2-95, tempstr, 21, g_AsciiFontImg);
+        	for(int i=0; i<5-life; ++i) putimage(700+i*30,123,&lives);
+		}
+        
+		UpdateBackgroundMusic(currentMusic, targetMusic);
         EndBatchDraw();
         Sleep(SLEEP_MS);
         param1.f += 1.0;
         
-        if (GetAsyncKeyState(VK_ESCAPE) & 0x8000) {
-            break;
-        }
+        if (GetAsyncKeyState(VK_ESCAPE) & 0x8000) break; //大退 
     }
 
     mciSendString("close bgm", NULL, 0, NULL);
